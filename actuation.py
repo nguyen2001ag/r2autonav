@@ -43,35 +43,47 @@ class Sensor(Node):
         timer_period = 0.5  # seconds
         self.timer = self.create_timer(timer_period, self.timer_callback)
         
-        #############################################
-        #                   PINOUT                  #
-        # GPIO 22: DC Motor driver Enable           #
-        # GPIO 23 (PWM1) : DC Motor1                #
-        # GPIO 24 (PWM1) : DC Motor2                #
-        # Stepper Motor :                           #
-        # GPIO 2: Button                            #          
-        #                         
-        #############################################
-        self.dc_driver_en = 22
-        self.motor1_pin = 23
-        self.motor2_pin = 24
-        self.stepper_pin = 26
-        self.button_pin = 2
-
-        self.reader = SimpleMFRC522()
+        #####################################################
+        #                   PINOUT                          #
+        # GPIO 22: DC Motor driver Enable                   #
+        # GPIO 23 (PWM1) : DC Motor1                        #
+        # GPIO 24 (PWM1) : DC Motor2                        #
+        # GPIO 2, 3, 4, 5: Stepper Motor Control            #
+        # GPIO 0: Button                                    #          
+        # GPIO 8, 9: SDA, SCL (I2C) for IR camera           #
+        # GPIO 12, 13, 14, 10: MOSI, MISO, SCK, SS for NFC  #
+        # GPIO 6: RST for NFC RC522                         #                     
+        #                                                   #
+        #####################################################
 
         GPIO.setmode(GPIO.BCM)
 
+        self.dc_driver_en = 22
+        self.motor1_pin = 23
+        self.motor2_pin = 24
+        self.button_pin = 0
+
+        # Set up the Stepper Pins
+        self.stepper_pins = [2, 3, 4, 5]
+        for pin in self.stepper_pins:
+            GPIO.setup(pin, GPIO.OUT)
+            GPIO.output(pin, GPIO.LOW)
+        self.get_logger().info("Setup the Stepper Motor")
+
+        self.reader = SimpleMFRC522()
+
         # DC motor setup
         GPIO.setup(self.dc_driver_en, GPIO.OUT)
+        GPIO.output(self.dc_driver_en, False)
         GPIO.setup(self.motor1_pin, GPIO.OUT)
         GPIO.setup(self.motor2_pin, GPIO.OUT)
+        self.get_logger().info("Setup the DC")
 
 
         # Button setup
         GPIO.setup(self.button_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
-        self.get_logger().info("Setup the DC")
+        
 
     # targeting_status callback function to stop wallfollower logic when target is detected
     def timer_callback(self):
@@ -196,29 +208,35 @@ class Sensor(Node):
 
         # Start the stepper to load the ball
 
-        # # Set up the Stepper Pins
-        # control_pins = [26, 19, 13, 6]
-        # for pin in control_pins:
-        #     GPIO.setup(pin, GPIO.OUT)
-        #     GPIO.output(pin, 0)
+        # careful lowering this, at some point you run into the mechanical limitation of how quick your motor can move
+        step_sleep = 0.002
+        direction = False
+        step_sequence = [[1,0,0,1],
+                        [1,0,0,0],
+                        [1,1,0,0],
+                        [0,1,0,0],
+                        [0,1,1,0],
+                        [0,0,1,0],
+                        [0,0,1,1],
+                        [0,0,0,1]]
 
-        # halfstep_seq = [
-        #     [1, 0, 0, 0],
-        #     [1, 1, 0, 0],
-        #     [0, 1, 0, 0],
-        #     [0, 1, 1, 0],
-        #     [0, 0, 1, 0],
-        #     [0, 0, 1, 1],
-        #     [0, 0, 0, 1],
-        #     [1, 0, 0, 1]]
-
-        # self.get_logger().info("Started the Stepper")
-        # # Start Spinning the Stepper
-        # for i in range(512):
-        #     for halfstep in range(8):
+        nSteps = 4096  # 5.625*(1/64) per step, 4096 steps is 360°
+        self.get_logger().info("Started the Stepper")
+        # Start Spinning the Stepper
+        # for i in range(nSteps):
+        #     for step in range(8):
         #         for pin in range(4):
-        #             GPIO.output(control_pins[pin], halfstep_seq[halfstep][pin])
+        #             GPIO.output(self.stepper_pins[pin], step_sequence[step][pin])
         #         time.sleep(0.001)
+
+        for i in range(nSteps):
+            for pin in range(4):
+                GPIO.output( self.stepper_pins[pin], step_sequence[motor_step_counter][pin] )
+            if direction==True:
+                motor_step_counter = (motor_step_counter - 1) % 8
+            elif direction==False:
+                motor_step_counter = (motor_step_counter + 1) % 8
+            time.sleep( step_sleep )
 
 
         # # Stop the DC Motor
@@ -226,6 +244,10 @@ class Sensor(Node):
         pwm1.stop()
         pwm2.stop()
         self.get_logger().info("Stopped the DC Motor")
+
+        ## Stop Stepper Motor
+        for i in range(4):
+            GPIO.output(self.stepper_pins[i], GPIO.LOW)
 
         # # Cleanup all GPIO
         GPIO.cleanup()
