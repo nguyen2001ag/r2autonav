@@ -37,6 +37,7 @@ stop_distance = 0.25
 scanfile = 'lidar.txt'
 mapfile = 'map.txt'
 
+
 # Debug flag to print output
 debug = True
 
@@ -46,6 +47,8 @@ debug = True
 stopping_time_in_seconds = 600 #seconds
 initial_direction = 0  # "Front", "Left", "Right", "Back"
 direction_dict = {0: "Front" , 1: "Left", 2: "Right", 3: "Back"}
+wall_following_dir = -1
+wall_following_dir_dic = {1 : "Right", -1 : "Left"}
 back_angles = range(150, 211)
 
 # code from https://automaticaddison.com/how-to-convert-a-quaternion-into-euler-angles-in-python/
@@ -159,6 +162,10 @@ class AutoNav(Node):
         ############################################################
         self.fsm = 0
 
+        # These values were determined by trial and error.
+        self.rotate_fast = 0.75 # Use when turning away
+        self.rotate_slow = 0.40 # Use when searching for wall
+
     def odom_callback(self, msg):
         # self.get_logger().info('In odom_callback')
         orientation_quat =  msg.pose.pose.orientation
@@ -271,73 +278,64 @@ class AutoNav(Node):
         self.publisher_.publish(twist)
 
 
-    def wall_following(self):
+    def wall_following(self, direction):
         self.get_logger().info('Wall following for exploration')
-        left_front = self.laser_range[10:45]
-        right_front = self.laser_range[315:351]
+        if direction == 1:
+            other_front = self.laser_range[15:45]
+            wall_front = self.laser_range[315:346]
+        else:
+            other_front = self.laser_range[315:346]
+            wall_front = self.laser_range[15:45]
         self.front_d = np.nan_to_num(self.laser_range[0], copy=False, nan=5)   # Choosing nan = 5 because, maximum lidar range is 3.5
-        self.leftfront_d = np.nan_to_num(left_front, copy=False, nan=5)
-        self.rightfront_d = np.nan_to_num(right_front, copy=False, nan=5)
-        self.leftfront_d = np.max(self.leftfront_d)
-        self.rightfront_d = np.max(self.rightfront_d)
+        self.otherfront_d = np.nan_to_num(other_front, copy=False, nan=5)
+        self.wallfront_d = np.nan_to_num(wall_front, copy=False, nan=5)
+        self.otherfront_d = np.min(self.otherfront_d)
+        self.wallfront_d = np.min(self.wallfront_d)
 
-        self.get_logger().info('Front Distance: %f' % self.front_d)
-        self.get_logger().info('Front Left Distance: %f' % self.leftfront_d)
-        self.get_logger().info('Front Right Distance: %f' % self.rightfront_d)
+        # self.get_logger().info('Front Distance: %f' % self.front_d)
+        # self.get_logger().info('Front Left Distance: %f' % self.leftfront_d)
+        # self.get_logger().info('Front Right Distance: %f' % self.rightfront_d)
 
         wall_threshold = 0.3
         # Set turning speeds (to the left) in rad/s
 
-        # These values were determined by trial and error.
-        self.rotate_fast = 0.75 # Use when turning away
-        self.rotate_slow = 0.40 # Use when searching for wall
-        # Set movement speed
-        # Set up twist message as msg
-        msg = Twist()
-        msg.linear.x = 0.0
-        msg.angular.z = 0.0
-        print("Im here")
 
-        if self.leftfront_d > wall_threshold and self.front_d > wall_threshold and self.rightfront_d > wall_threshold:
+        if self.otherfront_d > wall_threshold and self.front_d > wall_threshold and self.wallfront_d > wall_threshold:
             self.state = "search for wall"
-            msg.linear.x = speedchange
-            msg.angular.z = -self.rotate_slow  # turn right to find wall
+            self.search_for_wall(direction)
 
-        elif self.leftfront_d > wall_threshold and self.front_d < wall_threshold and self.rightfront_d > wall_threshold:
+        elif self.otherfront_d > wall_threshold and self.front_d < wall_threshold and self.wallfront_d > wall_threshold:
             self.state = "turn left"
-            msg.angular.z = self.rotate_fast
+            self.turn(direction)
 
-        elif (self.leftfront_d > wall_threshold and self.front_d > wall_threshold and self.rightfront_d < wall_threshold):
-            if (self.rightfront_d < 0.25): # Avoid crashing the wall
+        elif (self.otherfront_d > wall_threshold and self.front_d > wall_threshold and self.wallfront_d < wall_threshold):
+            if (self.wallfront_d < 0.3): # Avoid crashing the wall
                 self.state = "turn left"
-                msg.linear.x = speedchange
-                msg.angular.z = self.rotate_fast
+                self.turn(direction)
             else:
                 # Go straight ahead
                 self.state = "follow wall"
-                msg.linear.x = speedchange
+                self.follow_wall()
 
-        elif self.leftfront_d < wall_threshold and self.front_d > wall_threshold and self.rightfront_d > wall_threshold:
+        elif self.otherfront_d < wall_threshold and self.front_d > wall_threshold and self.wallfront_d > wall_threshold:
             self.state = "search for wall"
-            msg.linear.x = speedchange
-            msg.angular.z = -self.rotate_slow  # turn right to find wall
+            self.search_for_wall(direction)
 
-        elif self.leftfront_d > wall_threshold and self.front_d < wall_threshold and self.rightfront_d < wall_threshold:
+        elif self.otherfront_d > wall_threshold and self.front_d < wall_threshold and self.wallfront_d < wall_threshold:
             self.state = "turn left"
-            msg.angular.z = self.rotate_fast
+            self.turn(direction)
 
-        elif self.leftfront_d < wall_threshold and self.front_d < wall_threshold and self.rightfront_d > wall_threshold:
+        elif self.otherfront_d < wall_threshold and self.front_d < wall_threshold and self.wallfront_d > wall_threshold:
             self.state = "turn left"
-            msg.angular.z = self.rotate_fast
+            self.turn(direction)
 
-        elif self.leftfront_d < wall_threshold and self.front_d < wall_threshold and self.rightfront_d < wall_threshold:
+        elif self.otherfront_d < wall_threshold and self.front_d < wall_threshold and self.wallfront_d < wall_threshold:
             self.state = "turn left"
-            msg.angular.z = self.rotate_fast
+            self.turn(direction)
 
-        elif self.leftfront_d < wall_threshold and self.front_d > wall_threshold and self.rightfront_d < wall_threshold:
+        elif self.otherfront_d < wall_threshold and self.front_d > wall_threshold and self.wallfront_d < wall_threshold:
             self.state = "search for wall"
-            msg.linear.x = speedchange
-            msg.angular.z = -self.rotate_slow  # turn right to find wall
+            self.search_for_wall(direction)
 
         else:
             pass
@@ -345,9 +343,33 @@ class AutoNav(Node):
         if debug:
             self.get_logger().info("The turtlebot is: %s " % self.state)
 
-        # Send velocity command to the robot
-        self.publisher_.publish(msg)
         rclpy.spin_once(self)
+
+    def follow_wall(self, direction: int):
+        msg = Twist()
+        msg.linear.x = 0.0
+        msg.angular.z = 0.0
+        msg.linear.x = speedchange
+        self.publisher_.publish(msg)
+
+    ## direction == 1 -> turn left (Right-wall following)
+    ## direction == -1 -> turn right (Left-wall following)    
+    def turn(self, direction : int): 
+        msg = Twist()
+        msg.linear.x = 0.0
+        msg.angular.z = 0.0
+        msg.angular.z = direction * self.rotate_fast
+        self.publisher_.publish(msg)
+
+    ## direction == 1 -> turn right (Right-wall following)
+    ## direction == -1 -> turn left (Left-wall following) 
+    def search_for_wall(self, direction: int):
+        msg = Twist()
+        msg.linear.x = 0.0
+        msg.angular.z = 0.0
+        msg.linear.x = speedchange
+        msg.angular.z = direction * -self.rotate_slow  
+        self.publisher_.publish(msg)
 
 
     def stopbot(self):
@@ -360,12 +382,27 @@ class AutoNav(Node):
         self.publisher_.publish(twist)
 
 
-    def firstMove(self):
+    def firstMove(self, direction):
+        # if initial_direction == 3:
+        #     self.get_logger().info("Going back")
+        # elif initial_direction == 2:
+        #     self.get_logger().info("Going right")
+        #     self.rotatebot(90)
+        # elif initial_direction == 1:
+        #     self.get_logger().info("Going right")
+        #     self.rotatebot(-90)
+        # elif initial_direction == 0:
+        #     self.get_logger().info("Going Forward")
+        #     self.rotatebot(180)
+
         self.get_logger().info('Moving backward to find wall')
         twist = Twist()
         twist.linear.x = -speedchange
         twist.angular.z = 0.0
+        # print("im not here")
         lrback = (self.laser_range[back_angles] < float(0.40)).nonzero()
+        # print("im here")
+        print(lrback)
         self.publisher_.publish(twist)
         while len(lrback[0]) <= 0:
             time.sleep(1)
@@ -375,7 +412,10 @@ class AutoNav(Node):
             lrback = (self.laser_range[back_angles] < float(0.40)).nonzero()
             self.publisher_.publish(twist)
         self.stopbot()
-        self.rotatebot(-90)  # Since it is at the back of the turtlebot, turn right to do right wall following
+
+        ## direction == 1 -> turn right (Right-wall following)
+        ## direction == -1 -> turn left (Left-wall following) 
+        self.rotatebot(direction * -90)  # Since it is at the back of the turtlebot, turn right to do right wall following
         self.stopbot()
 
 
@@ -391,10 +431,10 @@ class AutoNav(Node):
             start_time = time.time()
 
             # initial move to find the appropriate wall to follow
-            # self.firstMove()
+            self.firstMove(wall_following_dir)
             # start wall follow logic
             if self.fsm == 0:
-                self.wall_following()
+                self.wall_following(wall_following_dir)
 
             while rclpy.ok():
                 if self.laser_range.size != 0:
@@ -405,15 +445,15 @@ class AutoNav(Node):
                         break
 
                     if self.fsm == 0:
-                        self.wall_following()
+                        self.wall_following(wall_following_dir)
                     elif self.fsm == 1:        ## Wait for button
                         self.stopbot()
                     elif self.fsm == 2:
-                        self.wall_following()
+                        self.wall_following(wall_following_dir)
                     elif self.fsm == 3:
                         self.actuation_publisher.publish(1)
                     elif self.fsm == 4:
-                        self.wall_following()
+                        self.wall_following(wall_following_dir)
                     # Continue wall following until detect target
 
                 # allow the callback functions to run
