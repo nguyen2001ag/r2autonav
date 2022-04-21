@@ -14,12 +14,8 @@ import RPi.GPIO as GPIO
 rotatechange = 0.1
 speedchange = 0.05
 
-heat_threshold = 32.0
-firing_threshold = 35.0
-
-# Set up Thermal Camera
-i2c = busio.I2C(board.SCL, board.SDA)
-amg = adafruit_amg88xx.AMG88XX(i2c)
+heat_threshold = 35.0
+firing_threshold = 36.7
 
 
 class Sensor(Node):
@@ -40,85 +36,145 @@ class Sensor(Node):
         self.actuation_subscriber = self.create_subscription(Int8, 'actuation', self.actuation_callback, 10)
         self.actuation_subscriber
 
-        timer_period = 0.5  # seconds
+        timer_period = 0.1  # seconds
         self.timer = self.create_timer(timer_period, self.timer_callback)
         
         #####################################################
         #                   PINOUT                          #
-        # GPIO 22: DC Motor driver Enable                   #
-        # GPIO 23 (PWM1) : DC Motor1                        #
-        # GPIO 24 (PWM1) : DC Motor2                        #
-        # GPIO 2, 3, 4, 5: Stepper Motor Control            #
-        # GPIO 0: Button                                    #          
-        # GPIO 8, 9: SDA, SCL (I2C) for IR camera           #
-        # GPIO 12, 13, 14, 10: MOSI, MISO, SCK, SS for NFC  #
-        # GPIO 6: RST for NFC RC522                         #                     
+        # GPIO 6: Button Enable                             #
+        # GPIO 12 (PWM1) : DC Motor1                        #
+        # GPIO 13 (PWM1) : DC Motor2                        #
+        # GPIO 22, 23, 24, 27: Stepper Motor Control        #
+        # GPIO 26: Button                                   #          
+        # GPIO 2, 3: SDA, SCL (I2C) for IR camera           #
+        # GPIO 10, 09, 11, 08: MOSI, MISO, SCK, SS for NFC  #
+        # GPIO 25: RST for NFC RC522                        #                     
         #                                                   #
         #####################################################
 
         GPIO.setmode(GPIO.BCM)
 
-        self.dc_driver_en = 22
-        self.motor1_pin = 23
-        self.motor2_pin = 24
-        self.button_pin = 0
+        self.button_en = 6
+        self.motor1_pin = 12
+        self.motor2_pin = 13
+        self.button_pin = 26
 
         # Set up the Stepper Pins
-        self.stepper_pins = [2, 3, 4, 5]
+        self.stepper_pins = [22, 23, 24, 27]
         for pin in self.stepper_pins:
             GPIO.setup(pin, GPIO.OUT)
             GPIO.output(pin, GPIO.LOW)
         self.get_logger().info("Setup the Stepper Motor")
 
         self.reader = SimpleMFRC522()
+        self.get_logger().info("Setup the NFC Reader")
 
         # DC motor setup
-        GPIO.setup(self.dc_driver_en, GPIO.OUT)
-        GPIO.output(self.dc_driver_en, False)
+        GPIO.setup(self.button_en, GPIO.OUT)
+        GPIO.output(self.button_en, True)
         GPIO.setup(self.motor1_pin, GPIO.OUT)
         GPIO.setup(self.motor2_pin, GPIO.OUT)
+        self.pwm1 = GPIO.PWM(self.motor1_pin, 1000)
+        self.pwm2 = GPIO.PWM(self.motor2_pin, 1000)
         self.get_logger().info("Setup the DC")
+
+        self.target_found = False
+        self.button_read = False
+        self.nfc_found = False
 
 
         # Button setup
         GPIO.setup(self.button_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+        self.get_logger().info("Setup Button")
+
+        # Set up Thermal Camera
+        self.i2c = busio.I2C(board.SCL, board.SDA)
+        self.amg = adafruit_amg88xx.AMG88XX(self.i2c)
+        self.get_logger().info("Setup AMG Thermal Camera")
+
+
+        self.fsm = 3
 
         
 
     # targeting_status callback function to stop wallfollower logic when target is detected
     def timer_callback(self):
-        if self.readRFID():
-            self.nfc_pub.publish(1)          # Publish 1, indicating receive NFC signal
-        if self.hasFoundTarget():
-            self.hot_pub.publish(1)          # Publish 1, indicating have detected hot signal
-        if self.readButton():
-            self.button_pub.publish(1)       # Publish 1, indicating user has press the button
+        if self.fsm == 1:
+            self.get_logger().info("Finding NFC")
+            if self.nfc_found:
+                self.get_logger().info("NFC Tag found, Changing to next state")
+                self.nfc_found = True
+                self.fsm = 2
+                msg = Int8()
+                msg.data = 1
+                self.nfc_pub.publish(msg)          # Publish 1, indicating receive NFC signal
+            else:
+                self.readRFID()
+                self.get_logger().info("Reading NFC tag")
+
+        elif self.fsm == 2:
+            self.get_logger().info("Waiting for Button")    
+            if self.button_read:
+                self.get_logger().warn("Button read, Changing to next state")
+                self.button_read = True
+                msg = Int8()
+                msg.data = 1
+                self.fsm = 3
+                self.button_pub.publish(msg)       # Publish 1, indicating user has press the button
+            else:
+                self.readButton()
+
+        elif self.fsm == 3:
+            self.get_logger().info("Finding Hot target")
+            if self.target_found:
+                self.get_logger().info("Hot targer found, Changing to next state")
+                msg = Int8()
+                msg.data = 1
+                self.fsm = 4
+                self.hot_pub.publish(msg)          # Publish 1, indicating have detected hot signal
+            else:
+                self.hasFoundTarget()
+                self.get_logger().info("Finding hot target!!")
+        
         
 
     def actuation_callback(self, msg):
         flag = msg.data
         if flag == 1:
             # centre the target
-            self.makeCenterTarget()
+            # self.makeCenterTarget()
 
+            # while not self.lock_target():
+            #     self.move_to_target()
+            #     self.makeCenterTarget()
+            self.get_logger().warn("Changing to state 2: Finding NFC")
+            self.fsm = 1
+        elif flag == 2:
+            self.get_logger().warn("Attempting to shoot at target")
             while not self.lock_target():
-                self.move_to_target()
                 self.makeCenterTarget()
+                self.move_to_target()
             self.allahuAkbar()
-        
-        self.get_logger().warning("Finish locking target!!!!!")
-        self.hot_pub.publish(2)              # Publish 2, indicating that has shot all the ball
+            self.get_logger().warning("Finish shooting at target!!!!!")
+            msg = Int8()
+            msg.data = 2
+            self.hot_pub.publish(msg)              # Publish 2, indicating that has shot all the ball
 
 
     def readRFID(self):
-        if self.reader.read():
-            return True
-        return False
+        id, data = self.reader.read_no_block()
+        if id:
+            self.get_logger().info("Read NFC with ID : %s" % str(id))
+            self.nfc_found = True
+        # print("Reading NFC")
+
 
     def readButton(self):
+        # self.get_logger().info("Waiting for your command!!!!!")
         if GPIO.input(self.button_pin):
-            return True
-        return False
+            self.get_logger().info("Button read, Received command to move")
+            GPIO.output(self.button_en, False)
+            self.button_read = True
     
     def stopbot(self):
         self.get_logger().info('In stopbot')
@@ -140,12 +196,15 @@ class Sensor(Node):
 
 
     def hasFoundTarget(self):
-        target_found = False
-        for row in amg.pixels:
+        for row in self.amg.pixels:
+            # print('[', end=" ")
             for temp in row:
                 if temp > heat_threshold:
-                    target_found = True
-        return target_found
+                    self.target_found = True
+                # print("{0:.1f}".format(temp), end=" ")
+            # print("]")
+            # print("\n")
+
         
     
     ## Adjust the robot to the middle of the hot target    
@@ -153,25 +212,27 @@ class Sensor(Node):
         centered = False
 
         while not centered:
-            screen = amg.pixels
-            max_column = -1
+            screen = self.amg.pixels
+            max_row = -1
             max_value = 0.0
             for row in range(len(screen)):
                 for column in range(len(screen[row])):
                     current_value = screen[row][column]
                     if current_value > max_value:
-                        max_column = column
+                        max_row = row
                         max_value = current_value
 
             if not centered:
                 # centre max value between row 3 and 4
                 # Needs calibration during real run
-                if max_column < 3:
-                    # spin it anti-clockwise
-                    self.turn(1)
-                elif max_column > 4:
-                    # spin it clockwise
+                if max_row < 3:
+                    # spin it clockwise, turn right
+                    self.get_logger().info("Turning right to adjust")
                     self.turn(-1)
+                elif max_row > 4:
+                    # spin it anti-clockwise, turn left
+                    self.get_logger().info("Turning left to adjust")
+                    self.turn(1)
                 else:
                     centered = True
                 self.stopbot()
@@ -181,7 +242,7 @@ class Sensor(Node):
     def move_to_target(self):
         # move to the object in increments
         twist = Twist()
-        twist.linear.x = speedchange
+        twist.linear.x = 0.1
         twist.angular.z = 0.0
         self.publisher_.publish(twist)
         time.sleep(1)
@@ -190,79 +251,77 @@ class Sensor(Node):
     def lock_target(self):
         for i in (3,4):
             for j in (3,4):
-                if amg.pixels[i][j] > firing_threshold:
+                if self.amg.pixels[i][j] > firing_threshold:
                     return True
 
         
     def allahuAkbar(self): ## Sorry I was to depressed to come up with a name
-        # Start the DC motor to shoot the ball
-        pwm1 = GPIO.PWM(self.motor1_pin, 1000)
-        pwm2 = GPIO.PWM(self.motor2_pin, 1000)
-        pwm1.start(60)
-        pwm2.start(60)
-
-        # # Start the Stepper Motor 2 seconds later
-
+        GPIO.output(self.button_en, True)
+        self.pwm1.start(50)
+        self.pwm2.start(50)
+        self.get_logger().info("Started the Shooter")
         # # Wait for 2 seconds
-        time.sleep(10)
+        time.sleep(5)
 
         # Start the stepper to load the ball
 
         # careful lowering this, at some point you run into the mechanical limitation of how quick your motor can move
-        step_sleep = 0.002
+        step_sleep = 0.005
         direction = False
-        step_sequence = [[1,0,0,1],
-                        [1,0,0,0],
-                        [1,1,0,0],
-                        [0,1,0,0],
+        motor_step_counter = 0
+        step_sequence = [[1,1,0,0],
                         [0,1,1,0],
-                        [0,0,1,0],
                         [0,0,1,1],
-                        [0,0,0,1]]
+                        [1,0,0,1]]
 
-        nSteps = 4096  # 5.625*(1/64) per step, 4096 steps is 360°
+        nSteps = 3072  # 5.625*(1/64) per step, 4096 steps is 360°
         self.get_logger().info("Started the Stepper")
-        # Start Spinning the Stepper
-        # for i in range(nSteps):
-        #     for step in range(8):
-        #         for pin in range(4):
-        #             GPIO.output(self.stepper_pins[pin], step_sequence[step][pin])
-        #         time.sleep(0.001)
 
         for i in range(nSteps):
             for pin in range(4):
                 GPIO.output( self.stepper_pins[pin], step_sequence[motor_step_counter][pin] )
             if direction==True:
-                motor_step_counter = (motor_step_counter - 1) % 8
+                motor_step_counter = (motor_step_counter - 1) % 4
             elif direction==False:
-                motor_step_counter = (motor_step_counter + 1) % 8
+                motor_step_counter = (motor_step_counter + 1) % 4
             time.sleep( step_sleep )
 
-
-        # # Stop the DC Motor
-        GPIO.output(self.dc_driver_en, GPIO.LOW)
-        pwm1.stop()
-        pwm2.stop()
-        self.get_logger().info("Stopped the DC Motor")
 
         ## Stop Stepper Motor
         for i in range(4):
             GPIO.output(self.stepper_pins[i], GPIO.LOW)
+
+        # # Stop the DC Motor
+        GPIO.output(self.button_en, GPIO.LOW)
+        self.pwm1.stop()
+        self.pwm2.stop()
+        self.get_logger().info("Stopped the DC Motor")
 
         # # Cleanup all GPIO
         GPIO.cleanup()
         self.get_logger().info("Cleaned up GPIO")
 
 
+    
+
+
+
 def main(args=None):
     rclpy.init(args=args)
     thermalcamera = Sensor()
+    try:
+        # rclpy.init(args=args)
+        # thermalcamera = Sensor()
+        # thermalcamera.hasFoundTarget()
+        rclpy.spin(thermalcamera)
 
     # Destroy the node explicitly
     # (optional - otherwise it will be done automatically
     # when the garbage collector destroys the node object)
-    thermalcamera.destroy_node()
-    rclpy.shutdown()
+    except KeyboardInterrupt:
+        print("Reached exception")
+        thermalcamera.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

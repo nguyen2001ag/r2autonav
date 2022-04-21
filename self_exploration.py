@@ -47,7 +47,7 @@ debug = True
 stopping_time_in_seconds = 600 #seconds
 initial_direction = 0  # "Front", "Left", "Right", "Back"
 direction_dict = {0: "Front" , 1: "Left", 2: "Right", 3: "Back"}
-wall_following_dir = -1
+wall_following_dir = 1
 wall_following_dir_dic = {1 : "Right", -1 : "Left"}
 back_angles = range(150, 211)
 
@@ -153,18 +153,20 @@ class AutoNav(Node):
         ############################################################
         ##                                                        ##
         ##              Define a Finite State Machine             ##
-        ## 0 : Exploration to find NFC tag                        ## 
-        ## 1 : Found NFC tag, waiting for ping pong ball          ##  
-        ## 2 : Loaded with ping pong ball, finding hot target     ##
-        ## 3 : Found hot targer, aiming and fire                  ##  
-        ## 4 : Shot at hot target, map the rest of the map        ##
+        ## 0 : Mapping the maze                                   ##
+        #  1 : Exploration to find NFC tag                        ## 
+        ## 2 : Found NFC tag, waiting for ping pong ball          ##  
+        ## 3 : Loaded with ping pong ball, finding hot target     ##
+        ## 4 : Found hot targer, aiming and fire                  ##  
+        ## 5 : Shot at hot target, end program                    ##
         ##                                                        ##  
         ############################################################
-        self.fsm = 0
+        self.fsm = 3
 
         # These values were determined by trial and error.
-        self.rotate_fast = 0.75 # Use when turning away
+        self.rotate_fast = 0.65 # Use when turning away
         self.rotate_slow = 0.40 # Use when searching for wall
+        self.follow_wall_speed = 0.2
 
     def odom_callback(self, msg):
         # self.get_logger().info('In odom_callback')
@@ -211,18 +213,18 @@ class AutoNav(Node):
         self.laser_range[self.laser_range==0] = np.nan
 
     def target_callback(self, msg):
-        if msg.data == 1 and (self.fsm == 2):
-            self.fsm == 3
-        elif msg.data == 2 and self.fsm == 3:
+        if msg.data == 1 and (self.fsm == 3):
             self.fsm = 4
+        elif msg.data == 2 and self.fsm == 4:
+            self.fsm = 5
 
     def nfc_callback(self, msg):
-        if msg.data == 1 and self.fsm == 0:
-            self.fsm == 1
-
-    def button_callback(self,msg):
         if msg.data == 1 and self.fsm == 1:
             self.fsm = 2
+
+    def button_callback(self,msg):
+        if msg.data == 1 and self.fsm == 2:
+            self.fsm = 3
 
     # function to rotate the TurtleBot
     def rotatebot(self, rot_angle):
@@ -281,59 +283,66 @@ class AutoNav(Node):
     def wall_following(self, direction):
         self.get_logger().info('Wall following for exploration')
         if direction == 1:
-            other_front = self.laser_range[15:45]
-            wall_front = self.laser_range[315:346]
+            other_front = self.laser_range[45]
+            wall_front = self.laser_range[315]
         else:
-            other_front = self.laser_range[315:346]
-            wall_front = self.laser_range[15:45]
-        self.front_d = np.nan_to_num(self.laser_range[0], copy=False, nan=5)   # Choosing nan = 5 because, maximum lidar range is 3.5
+            other_front = self.laser_range[315]
+            wall_front = self.laser_range[45]
+        # self.front_d_r = np.nan_to_num(self.laser_range[330:360], copy=False, nan=5)   # Choosing nan = 5 because, maximum lidar range is 3.5
+        # self.front_d_l = np.nan_to_num(self.laser_range[0:30], copy=False, nan=5)   # Choosing nan = 5 because, maximum lidar range is 3.5
         self.otherfront_d = np.nan_to_num(other_front, copy=False, nan=5)
         self.wallfront_d = np.nan_to_num(wall_front, copy=False, nan=5)
-        self.otherfront_d = np.min(self.otherfront_d)
-        self.wallfront_d = np.min(self.wallfront_d)
+        # self.front_d_r = np.min(self.front_d_r)
+        # self.front_d_l = np.min(self.front_d_l)
+        # self.front_d = min(self.front_d_l, self.front_d_r)
 
-        # self.get_logger().info('Front Distance: %f' % self.front_d)
-        # self.get_logger().info('Front Left Distance: %f' % self.leftfront_d)
-        # self.get_logger().info('Front Right Distance: %f' % self.rightfront_d)
+        # self.otherfront_d = np.min(self.otherfront_d)
+        # self.wallfront_d = np.min(self.wallfront_d)
+        self.front_d = np.nan_to_num(self.laser_range[0], copy=False, nan=5)
 
-        wall_threshold = 0.3
+        self.get_logger().info('Front Distance: %f' % self.front_d)
+        self.get_logger().info('Front Left Distance: %f' % self.otherfront_d)
+        self.get_logger().info('Front Right Distance: %f' % self.wallfront_d)
+
+        wall_threshold = 0.35
         # Set turning speeds (to the left) in rad/s
 
 
-        if self.otherfront_d > wall_threshold and self.front_d > wall_threshold and self.wallfront_d > wall_threshold:
-            self.state = "search for wall"
-            self.search_for_wall(direction)
-
-        elif self.otherfront_d > wall_threshold and self.front_d < wall_threshold and self.wallfront_d > wall_threshold:
-            self.state = "turn left"
-            self.turn(direction)
-
-        elif (self.otherfront_d > wall_threshold and self.front_d > wall_threshold and self.wallfront_d < wall_threshold):
-            if (self.wallfront_d < 0.3): # Avoid crashing the wall
+        if (self.otherfront_d > wall_threshold and self.front_d > wall_threshold and self.wallfront_d < wall_threshold): 
+            if (self.wallfront_d < 0.22): #0.22: # Avoid crashing the wall, probably decrease this value
                 self.state = "turn left"
                 self.turn(direction)
-            else:
+            else: 
                 # Go straight ahead
                 self.state = "follow wall"
-                self.follow_wall()
+                self.follow_wall(direction)
 
-        elif self.otherfront_d < wall_threshold and self.front_d > wall_threshold and self.wallfront_d > wall_threshold:
+
+        elif self.otherfront_d > wall_threshold and self.front_d < wall_threshold and self.wallfront_d > wall_threshold: ##left/right far from wall, front far from wall, right/ left near to wall
+            self.state = "turn left"
+            self.turn(direction)
+
+        elif self.otherfront_d > wall_threshold and self.front_d > wall_threshold and self.wallfront_d > wall_threshold: #all sides far from wall
             self.state = "search for wall"
             self.search_for_wall(direction)
 
-        elif self.otherfront_d > wall_threshold and self.front_d < wall_threshold and self.wallfront_d < wall_threshold:
+        elif self.otherfront_d < wall_threshold and self.front_d > wall_threshold and self.wallfront_d > wall_threshold: #other side far from wall
+            self.state = "search for wall"
+            self.search_for_wall(direction)
+
+        elif self.otherfront_d > wall_threshold and self.front_d < wall_threshold and self.wallfront_d < wall_threshold: #front near to wall, either left or right near to wall => at corner
+            self.state = "turn left"
+            self.turn(direction, 0.9)
+
+        elif self.otherfront_d < wall_threshold and self.front_d < wall_threshold and self.wallfront_d > wall_threshold: #also at corner
+            self.state = "turn left"
+            self.turn(direction, 0.9)
+
+        elif self.otherfront_d < wall_threshold and self.front_d < wall_threshold and self.wallfront_d < wall_threshold: #all 3 sides near wall 
             self.state = "turn left"
             self.turn(direction)
 
-        elif self.otherfront_d < wall_threshold and self.front_d < wall_threshold and self.wallfront_d > wall_threshold:
-            self.state = "turn left"
-            self.turn(direction)
-
-        elif self.otherfront_d < wall_threshold and self.front_d < wall_threshold and self.wallfront_d < wall_threshold:
-            self.state = "turn left"
-            self.turn(direction)
-
-        elif self.otherfront_d < wall_threshold and self.front_d > wall_threshold and self.wallfront_d < wall_threshold:
+        elif self.otherfront_d < wall_threshold and self.front_d > wall_threshold and self.wallfront_d < wall_threshold: #left and right near wall
             self.state = "search for wall"
             self.search_for_wall(direction)
 
@@ -345,32 +354,34 @@ class AutoNav(Node):
 
         rclpy.spin_once(self)
 
+
     def follow_wall(self, direction: int):
         msg = Twist()
         msg.linear.x = 0.0
         msg.angular.z = 0.0
-        msg.linear.x = speedchange
+        msg.linear.x = self.follow_wall_speed
         self.publisher_.publish(msg)
 
     ## direction == 1 -> turn left (Right-wall following)
     ## direction == -1 -> turn right (Left-wall following)    
-    def turn(self, direction : int): 
+    def turn(self, direction : int, baseline = 0.4): 
         msg = Twist()
         msg.linear.x = 0.0
         msg.angular.z = 0.0
-        msg.angular.z = direction * self.rotate_fast
+        msg.angular.z = direction * 0.75 #0.75
         self.publisher_.publish(msg)
 
     ## direction == 1 -> turn right (Right-wall following)
     ## direction == -1 -> turn left (Left-wall following) 
-    def search_for_wall(self, direction: int):
+    def search_for_wall(self, direction: int, baseline = 0.75):
         msg = Twist()
         msg.linear.x = 0.0
         msg.angular.z = 0.0
-        msg.linear.x = speedchange
-        msg.angular.z = direction * -self.rotate_slow  
+        # msg.linear.x = speedchange
+        # msg.angular.z = direction * -self.rotate_slow  
+        msg.linear.x = 0.15 #0.15
+        msg.angular.z = direction * - 0.6 #0.6
         self.publisher_.publish(msg)
-
 
     def stopbot(self):
         self.get_logger().info('In stopbot')
@@ -400,7 +411,7 @@ class AutoNav(Node):
         twist.linear.x = -speedchange
         twist.angular.z = 0.0
         # print("im not here")
-        lrback = (self.laser_range[back_angles] < float(0.40)).nonzero()
+        lrback = (self.laser_range[back_angles] < float(0.50)).nonzero()
         # print("im here")
         print(lrback)
         self.publisher_.publish(twist)
@@ -409,7 +420,7 @@ class AutoNav(Node):
             twist.linear.x = -speedchange
             twist.angular.z = 0.0
             rclpy.spin_once(self)
-            lrback = (self.laser_range[back_angles] < float(0.40)).nonzero()
+            lrback = (self.laser_range[back_angles] < float(0.50)).nonzero()
             self.publisher_.publish(twist)
         self.stopbot()
 
@@ -423,6 +434,8 @@ class AutoNav(Node):
         try:
             rclpy.spin_once(self)
 
+            shot = False
+
             # ensure that we have a valid lidar data before we start wall follow logic
             while (self.laser_range.size == 0):
                 self.get_logger().info("Getting values from callbacks")
@@ -431,10 +444,10 @@ class AutoNav(Node):
             start_time = time.time()
 
             # initial move to find the appropriate wall to follow
-            self.firstMove(wall_following_dir)
             # start wall follow logic
-            if self.fsm == 0:
-                self.wall_following(wall_following_dir)
+            # while self.fsm == 0:
+            #     # self.firstMove(wall_following_dir)
+            #     self.wall_following(wall_following_dir)
 
             while rclpy.ok():
                 if self.laser_range.size != 0:
@@ -446,14 +459,34 @@ class AutoNav(Node):
 
                     if self.fsm == 0:
                         self.wall_following(wall_following_dir)
-                    elif self.fsm == 1:        ## Wait for button
+                        # if self.closure(self.occdata) or elapsed_time > 240:
+                        if elapsed_time > 30:
+                            self.fsm = 1
+                            msg = Int8()
+                            msg.data = 1
+                            self.actuation_publisher.publish(msg)
+                            self.get_logger().warn("Changing to STATE 1: Finding NFC")
+                    elif self.fsm == 1:        ## Finding NFC
+                        self.wall_following(wall_following_dir)
+                        self.get_logger().warn("At STATE 1: Finding NFC") 
+                    elif self.fsm == 2:        ## Wait for button
                         self.stopbot()
-                    elif self.fsm == 2:
+                        self.get_logger().warn("At STATE 2: waiting for balls") 
+                        # time.sleep(10)
+                        # self.fsm = 3
+                    elif self.fsm == 3:        ## After receive button, proceed to find hot_target
                         self.wall_following(wall_following_dir)
-                    elif self.fsm == 3:
-                        self.actuation_publisher.publish(1)
-                    elif self.fsm == 4:
+                        self.get_logger().warn("At STATE 3: Finding hot target") 
+                    elif self.fsm == 4:        ## Found hot_target, shooot
+                        self.get_logger().warn("At STATE 4: Sending command to shoot at hot target") 
+                        msg = Int8()
+                        if not shot:
+                            msg.data = 2
+                            self.actuation_publisher.publish(msg)
+                            shot = True
+                    elif self.fsm == 5:        ## Finish
                         self.wall_following(wall_following_dir)
+                        # self.stopbot()
                     # Continue wall following until detect target
 
                 # allow the callback functions to run
@@ -461,20 +494,79 @@ class AutoNav(Node):
 
         except Exception as e:
             print(e)
+            self.stopbot()
 
         # Ctrl-c detected
         finally:
             # stop moving
             self.stopbot()
             # save map
-            # cv2.imwrite('mazemapfinally.png', self.occdata)
+            cv2.imwrite('map.png', self.occdata)
+
+    def closure(self, occdata):
+        # This function checks if mapdata contains a closed contour. The function
+        # assumes that the raw map data from SLAM has been modified so that
+        # -1 (unmapped) is now 0, and 0 (unoccupied) is now 1, and the occupied
+        # values go from 1 to 101.
+
+        # According to: https://stackoverflow.com/questions/17479606/detect-closed-contours?rq=1
+        # closed contours have larger areas than arc length, while open contours have larger
+        # arc length than area. But in my experience, open contours can have areas larger than
+        # the arc length, but closed contours tend to have areas much larger than the arc length
+        # So, we will check for contour closure by checking if any of the contours
+        # have areas that are more than 10 times larger than the arc length
+        # This value may need to be adjusted with more testing.
+        ALTHRESH = 10
+        # We will slightly fill in the contours to make them easier to detect
+        DILATE_PIXELS = 3
+        mapdata = occdata
+        # assumes mapdata is uint8 and consists of 0 (unmapped), 1 (unoccupied),
+        # and other positive values up to 101 (occupied)
+        # so we will apply a threshold of 2 to create a binary image with the
+        # occupied pixels set to 255 and everything else is set to 0
+        # we will use OpenCV's threshold function for this
+        ret, img2 = cv2.threshold(mapdata, 2, 255, 0)
+        # we will perform some erosion and dilation to fill out the contours a
+        # little bit
+        element = cv2.getStructuringElement(
+            cv2.MORPH_CROSS, (DILATE_PIXELS, DILATE_PIXELS))
+        # img3 = cv2.erode(img2,element)
+        img4 = cv2.dilate(img2, element)
+        # use OpenCV's findContours function to identify contours
+        # OpenCV version 3 changed the number of return arguments, so we
+        # need to check the version of OpenCV installed so we know which argument
+        # to grab
+        fc = cv2.findContours(img4, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        (major, minor, _) = cv2.__version__.split(".")
+        if(major == '3'):
+            contours = fc[1]
+        else:
+            contours = fc[0]
+        # find number of contours returned
+        lc = len(contours)
+        # rospy.loginfo('# Contours: %s', str(lc))
+        # create array to compute ratio of area to arc length
+        cAL = np.zeros((lc, 2))
+        for i in range(lc):
+            cAL[i, 0] = cv2.contourArea(contours[i])
+            cAL[i, 1] = cv2.arcLength(contours[i], True)
+
+        # closed contours tend to have a much higher area to arc length ratio,
+        # so if there are no contours with high ratios, we can safely say
+        # there are no closed contours
+        cALratio = cAL[:, 0]/cAL[:, 1]
+        # rospy.loginfo('Closure: %s', str(cALratio))
+        if np.any(cALratio > ALTHRESH):
+            return True
+        else:
+            return False
 
 
 def main(args=None):
     rclpy.init(args=args)
-
-    auto_nav = AutoNav()
-    auto_nav.mover()
+    try:
+        auto_nav = AutoNav()
+        auto_nav.mover()
 
     # create matplotlib figure
     # plt.ion()
@@ -483,8 +575,10 @@ def main(args=None):
     # Destroy the node explicitly
     # (optional - otherwise it will be done automatically
     # when the garbage collector destroys the node object)
-    auto_nav.destroy_node()
-    rclpy.shutdown()
+    except KeyboardInterrupt:
+        auto_nav.stopbot()
+        auto_nav.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':
