@@ -4,40 +4,40 @@ Performing autonomous maze exploration using wall following algorithm. Automatic
 
 ## What does the code have
 
-This repository contains all the code that is necessary for a TurtleBot to map a closed connected unknown maze (by following the wall on the robot's right) and shoot a ping-pong ball to an IR target (provided the firing mechanism used is the same as ours). You can go to our [Documentation](Robot%20Documentation.pdf) file to read about the details of our robot.
+Provided that your robot has the similar design like our robot, this repository includes all the necessary code to perform an autonomous exploration of a 2D maze, detect NFC tag to stop and fire ping pong ball at hot targets. For details of the design of our robot, you can go to our [Documentation](Robot%20Documentation.pdf) file to read about the details of our robot.
 
-- [r2wallfollower.py](r2wallfollower.py) file is the wall following code which has been calibrated to fit our robots' needs. This code also includes a subscriber to 'targeting_status' topic being published by the TurtleBot such that the robot can navigate the maze while continuously trying to detect the target. The robot will then fire when the target is detected before resuming its navigation once again if the map is not yet complete.
-- [r2targeting.py](r2targeting.py) file is the targeting and firing code which has been calibrated to fit our robots' needs. The target, in our case, radiates IR and we use a thermal camera to detect it. This file will be put into the RPi on the TurtleBot and will be run from inside the RPi on the TurtleBot. This code includes the publisher which will publish the 'targeting_status' topic to which the wall following code will subscribe.
-- [Partially_Working_Navigation](Partially_Working_Navigation) folder contains all the partially working navigation code that have not been integrated with the targeting code and may not fully complete the navigation. These files are <b>not</b> necessary for the TurtleBot to navigate the maze by wall following, identify the IR target, and fire.
-- [Original_Files](Original_Files) folder contains all the original files that comes with the initial fork from [shihchengyen's r2auto_nav repository](https://github.com/shihchengyen/r2auto_nav) and are <b>not</b> necessary for the TurtleBot to navigate the maze by wall following, identify the IR target, and fire.
-- [Extras](Extras) folder contains all the extra files that are <b>not</b> necessary for the TurtleBot to navigate the maze by wall following, identify the IR target, and fire.
+- [self_exploration.py](self_exploration.py) file is the code for our exploration algorithm. The code structure bases on a Finite State Machine as shown below: ![Software_Diagram](Software_Diagram.png)
 
-## Possible Configuration
+- [actuation.py](actuation.py) file contains the code for our sensors on the Turtlebot3. The code continously read NFC, IR sensor and a button at a rate of 10Hz and reports the value to the exploration program through the 3 topics ```/hot_target```, ```/nfc``` and ```/button```.
 
-### For the wall following code
-- Under constants, you can change ```speedchange``` and ```rotatechange``` to adjust the speed and rotation speed of the TurtleBot. Moreover, you can also change ```initial_direction``` to change the direction of the robot's initial move (such that the robot will find the correct wall to follow).
-- Inside the ```pick_direction``` function, you can adjust ```d``` which is the distance the robot will try to maintain from the wall as it follows the wall.
+- [base_code](base_code) folder contains all the original files that comes with the initial fork from [shihchengyen's r2auto_nav repository](https://github.com/shihchengyen/r2auto_nav).
 
-### For the targeting code
+## Configuration for your own environment
+
+### self_exploration.py
+- Under <b> #some variable to tune your bot</b>, you can change ```wall_following_dir``` to decide which side of the wall your robot will follow. Only the value of 1:  <b>Right Wall Following</b> and -1: <b>Left Wall Following</b> are allowed.
+- Inside the attributes of the class, you can adjust ```self.fsm``` to decide which state you want to start with. Please refer to the diagram above.
+
+### actuation.py
 Under constants, you can change :
-- ```speedchange``` and ```rotatechange``` to adjust the speed and rotation speed of the TurtleBot. 
-- ```detecting_threshold``` which determines the target detection temperature threshold and ```firing_threshold``` which determines the firing temperature threshold to fit your needs.
+- ```heat_threshold``` which determines the target detection temperature threshold and ```firing_threshold``` which determines the firing temperature threshold to fit your needs.
 
-## How to Use
+## How to install and run your code
 
 In your laptop:
-- Create a ROS2 package and clone this repository into that package. Make sure to edit the setup.py file so that you can run the wall following code.
+- Create a ROS2 package and clone this repository into that package using ```git clone git@github.com:nguyen2001ag/r2autonav.git```. Make sure to edit the setup.py file to run the code.
 - Build the package.
 
 In the RPi on the TurtleBot:
-- Create a ROS2 package and copy [r2targeting.py](r2targeting.py) file into that package. Make sure to edit the setup.py file so that you can run the targeting code.
+- Create a ROS2 package and copy [actuation.py](actuation.py) file into that package. Make sure setup.py is edited to include the code.
 - Build the package.
 
 Running Instructions:
-- Start rosbu from the RPi on the TurtleBot.
+- ssh into the Raspberry Pi on the Turtlebot.
+- Start the bringup from the RPi on the TurtleBot: ```roslaunch turtlebot3_bringup turtlebot3_robot.launch```
 - Start rslam from your laptop: 
   ``` ros2 launch turtlebot3_cartographer cartographer.launch.py ```
-- Start the targeting code from the RPi on the TurtleBot: 
+- Start the actuation code from the RPi on the TurtleBot: 
   ```ros2 run <package_name> <entry_point_specified_in_the_setup.py> ```
 - Start the wall following code from your laptop: 
-  ```ros2 run <package_name> r2wallfollower ```
+  ```ros2 run <package_name> self_exploration ```
