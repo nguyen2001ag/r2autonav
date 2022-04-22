@@ -11,6 +11,8 @@ Provided that your robot has the similar design like our robot, this repository 
 - [actuation.py](actuation.py) file contains the code for our sensors on the Turtlebot3. The code continously read NFC, IR sensor and a button at a rate of 10Hz and reports the value to the exploration program through the 3 topics ```/hot_target```, ```/nfc``` and ```/button```.
 
 - [base_code](base_code) folder contains all the original files that comes with the initial fork from [shihchengyen's r2auto_nav repository](https://github.com/shihchengyen/r2auto_nav).
+- [test_code](test_code) folder contains all the python scripts to test sensor components on the Turtlebot3. Refer to the [Documentation](Documentation.pdf) for details.
+- [Documentation](Documentation) file refers to the detail of our design including mechanical and electrical designs.
 
 ## Configuration for your own environment
 
